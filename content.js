@@ -1,11 +1,32 @@
 // ChatGPT Typing Sounds Extension
+
+// Constants
+const REALISTIC_KEY_SOUND_DURATION = 0.08; // 80ms
+const KEY_SOUND_ENVELOPE_DECAY = 50;
+const KEY_SOUND_ENVELOPE_SQUARED_DECAY = 200;
+const KEY_SOUND_NOISE_AMPLITUDE = 0.4;
+const KEY_SOUND_CLICK1_FREQ = 2000;
+const KEY_SOUND_CLICK1_AMPLITUDE = 0.3;
+const KEY_SOUND_CLICK2_FREQ = 3500;
+const KEY_SOUND_CLICK2_AMPLITUDE = 0.2;
+const KEY_SOUND_CLICK3_FREQ = 5000;
+const KEY_SOUND_CLICK3_AMPLITUDE = 0.1;
+const KEY_SOUND_FINAL_AMPLITUDE = 0.15;
+const NUM_KEYBOARD_SOUNDS = 7;
+const KEY_SOUND_GAIN = 0.3;
+const MIN_TYPING_DELAY_MS = 80;
+const RANDOM_TYPING_DELAY_MS = 70;
+const INITIAL_TYPING_DELAY_MS = 400;
+const NO_CONTENT_UPDATE_STOP_TYPING_MS = 500;
+const INACTIVITY_TIMEOUT_SAFETY_NET_MS = 1200;
+const INITIAL_ACTIVITY_CHECK_DELAY_MS = 1000;
+
 class TypingSoundManager {
   constructor() {
     this.isTyping = false;
     this.typingInterval = null;
     this.audioContext = null;
     this.keyboardSounds = [];
-    this.currentSoundIndex = 0;
     this.lastUpdateTime = 0;
     this.inactivityTimeout = null;
     
@@ -27,7 +48,7 @@ class TypingSoundManager {
     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
     
     // יצירת מספר צלילי מקלדת שונים - צלילים יותר ריאליסטיים
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < NUM_KEYBOARD_SOUNDS; i++) {
       const buffer = await this.createRealisticKeySound();
       this.keyboardSounds.push(buffer);
     }
@@ -37,7 +58,7 @@ class TypingSoundManager {
 
   async createRealisticKeySound() {
     const sampleRate = this.audioContext.sampleRate;
-    const duration = 0.08; // 80ms - קצר יותר
+    const duration = REALISTIC_KEY_SOUND_DURATION;
     const buffer = this.audioContext.createBuffer(1, sampleRate * duration, sampleRate);
     const data = buffer.getChannelData(0);
 
@@ -48,18 +69,18 @@ class TypingSoundManager {
       let sample = 0;
       
       // רעש לבן לאפקט הפלסטיק
-      const noise = (Math.random() - 0.5) * 0.4;
+      const noise = (Math.random() - 0.5) * KEY_SOUND_NOISE_AMPLITUDE;
       
       // תדרים גבוהים לקליק
-      const click1 = Math.sin(2 * Math.PI * 2000 * t) * 0.3;
-      const click2 = Math.sin(2 * Math.PI * 3500 * t) * 0.2;
-      const click3 = Math.sin(2 * Math.PI * 5000 * t) * 0.1;
+      const click1 = Math.sin(2 * Math.PI * KEY_SOUND_CLICK1_FREQ * t) * KEY_SOUND_CLICK1_AMPLITUDE;
+      const click2 = Math.sin(2 * Math.PI * KEY_SOUND_CLICK2_FREQ * t) * KEY_SOUND_CLICK2_AMPLITUDE;
+      const click3 = Math.sin(2 * Math.PI * KEY_SOUND_CLICK3_FREQ * t) * KEY_SOUND_CLICK3_AMPLITUDE;
       
       // envelope חד וקצר
-      const envelope = Math.exp(-t * 50) * Math.exp(-t * t * 200);
+      const envelope = Math.exp(-t * KEY_SOUND_ENVELOPE_DECAY) * Math.exp(-t * t * KEY_SOUND_ENVELOPE_SQUARED_DECAY);
       
       // שילוב הצלילים
-      sample = (noise + click1 + click2 + click3) * envelope * 0.15;
+      sample = (noise + click1 + click2 + click3) * envelope * KEY_SOUND_FINAL_AMPLITUDE;
       
       data[i] = sample;
     }
@@ -78,7 +99,7 @@ class TypingSoundManager {
     source.buffer = this.keyboardSounds[soundIndex];
     
     // עוצמת קול נמוכה
-    gainNode.gain.value = 0.3;
+    gainNode.gain.value = KEY_SOUND_GAIN;
     
     source.connect(gainNode);
     gainNode.connect(this.audioContext.destination);
@@ -98,12 +119,12 @@ class TypingSoundManager {
       this.playKeySound();
       
       // זמן רנדומלי בין צלילים
-      const nextDelay = 80 + Math.random() * 70;
+      const nextDelay = MIN_TYPING_DELAY_MS + Math.random() * RANDOM_TYPING_DELAY_MS;
       this.typingInterval = setTimeout(playSound, nextDelay);
     };
     
     // השהיה של 400ms לפני התחלת הצלילים
-    this.typingInterval = setTimeout(playSound, 400);
+    this.typingInterval = setTimeout(playSound, INITIAL_TYPING_DELAY_MS);
   }
 
   stopTyping() {
@@ -140,7 +161,7 @@ class TypingSoundManager {
     });
 
     // בדיקה ראשונית
-    setTimeout(() => this.checkForTypingActivity(), 1000);
+    setTimeout(() => this.checkForTypingActivity(), INITIAL_ACTIVITY_CHECK_DELAY_MS);
   }
 
   checkForTypingActivity() {
@@ -148,17 +169,22 @@ class TypingSoundManager {
     const now = Date.now();
 
     // בדיקה 1: האם יש כפתור Stop (אמצעי חיובי שהמודל כותב)
-    const stopButton = document.querySelector('button[data-testid*="stop"]') || 
-                      document.querySelector('button[aria-label*="Stop"]') ||
-                      document.querySelector('button:contains("Stop")') ||
-                      document.querySelector('[data-testid="stop-button"]');
+    const stopButtonSelectors = [
+      'button[data-testid*="stop"]',
+      'button[aria-label*="Stop"]',
+      '[data-testid="stop-button"]'
+    ];
     
-    if (stopButton && stopButton.offsetParent !== null && !stopButton.disabled) {
-      contentChanged = true;
-      this.lastUpdateTime = now;
-      console.log('🔍 זוהה כפתור Stop - המודל כותב');
+    for (const selector of stopButtonSelectors) {
+      const stopButton = document.querySelector(selector);
+      if (stopButton && stopButton.offsetParent !== null && !stopButton.disabled) {
+        contentChanged = true;
+        this.lastUpdateTime = now;
+        console.log('🔍 זוהה כפתור Stop - המודל כותב');
+        break; // Found a stop button, no need to check other selectors
+      }
     }
-
+    
     // בדיקה 2: האם התוכן משתנה בהודעה האחרונה
     const lastMessage = document.querySelector('[data-message-author-role="assistant"]:last-child');
     if (lastMessage && this.isElementUpdating(lastMessage)) {
@@ -196,8 +222,8 @@ class TypingSoundManager {
       this.resetInactivityTimer();
     } 
     // אם אין שינוי כבר 2 שניות - הפסק הקלדה
-    else if (this.isTyping && (now - this.lastUpdateTime > 500)) {
-      console.log('⏰ לא היה עדכון תוכן 500 מילישניות - הפסקת הקלדה');
+    else if (this.isTyping && (now - this.lastUpdateTime > NO_CONTENT_UPDATE_STOP_TYPING_MS)) {
+      console.log(`⏰ לא היה עדכון תוכן ${NO_CONTENT_UPDATE_STOP_TYPING_MS} מילישניות - הפסקת הקלדה`);
       this.stopTyping();
     }
     // אם יש שינוי והוא כבר מקליד - אפס טיימר
@@ -217,7 +243,7 @@ class TypingSoundManager {
         console.log('⏰ timeout בטיחות - הפסקת הקלדה');
         this.stopTyping();
       }
-    }, 1200);
+    }, INACTIVITY_TIMEOUT_SAFETY_NET_MS);
   }
 
   isElementUpdating(element) {
