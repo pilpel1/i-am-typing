@@ -127,7 +127,11 @@ class TypingSoundManager {
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         if (mutation.type === 'childList') {
-          this.checkForTypingActivity();
+          // בדיקה יותר מתקדמת - רק אם השינוי קשור לתוכן הודעות
+          const targetElement = mutation.target;
+          if (this.isRelevantChange(targetElement)) {
+            this.checkForTypingActivity();
+          }
         }
       });
     });
@@ -138,15 +142,35 @@ class TypingSoundManager {
       subtree: true
     });
 
-    // בדיקה ראשונית
-    setTimeout(() => this.checkForTypingActivity(), INITIAL_ACTIVITY_CHECK_DELAY_MS);
+    // בדיקה ראשונית - חכה יותר שהדף יתייצב
+    setTimeout(() => this.checkForTypingActivity(), INITIAL_ACTIVITY_CHECK_DELAY_MS * 3);
+  }
+
+  isRelevantChange(targetElement) {
+    // בדוק אם השינוי קשור לאזור ההודעות של ChatGPT
+    if (!targetElement) return false;
+    
+    // חיפוש עלה במעלה העץ עד למציאת אלמנט רלוונטי
+    let current = targetElement;
+    for (let i = 0; i < 10 && current; i++) {
+      // אם זה אזור ההודעות
+      if (current.getAttribute && (
+        current.getAttribute('data-message-author-role') === 'assistant' ||
+        current.querySelector && current.querySelector('[data-message-author-role="assistant"]')
+      )) {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    
+    return false;
   }
 
   checkForTypingActivity() {
     let contentChanged = false;
     const now = Date.now();
 
-    // בדיקה 1: האם יש כפתור Stop (אמצעי חיובי שהמודל כותב)
+    // בדיקה 1: האם יש כפתור Stop (האמצעי הכי מהימן)
     const stopButtonSelectors = [
       'button[data-testid*="stop"]',
       'button[aria-label*="Stop"]',
@@ -159,38 +183,17 @@ class TypingSoundManager {
         contentChanged = true;
         this.lastUpdateTime = now;
         console.log('🔍 זוהה כפתור Stop - המודל כותב');
-        break; // Found a stop button, no need to check other selectors
+        break;
       }
     }
     
-    // בדיקה 2: האם התוכן משתנה בהודעה האחרונה
-    const lastMessage = document.querySelector('[data-message-author-role="assistant"]:last-child');
-    if (lastMessage && this.isElementUpdating(lastMessage)) {
-      contentChanged = true;
-      this.lastUpdateTime = now;
-      console.log('🔍 זוהה עדכון תוכן - המודל כותב');
-    }
-
-    // בדיקה 3: חיפוש אלמנטים דינמיים
-    const streamingIndicators = [
-      '[data-testid*="streaming"]',
-      '[class*="streaming"]',
-      '[class*="generating"]',
-      '.cursor-blink',
-      '[class*="cursor"]',
-      '[class*="typing"]'
-    ];
-
-    for (let selector of streamingIndicators) {
-      const elements = document.querySelectorAll(selector);
-      if (elements.length > 0) {
-        elements.forEach(el => {
-          if (el.offsetParent !== null) {
-            contentChanged = true;
-            this.lastUpdateTime = now;
-            console.log(`🔍 זוהה אלמנט דינמי: ${selector}`);
-          }
-        });
+    // בדיקה 2: האם התוכן משתנה בהודעת assistant
+    if (!contentChanged) {
+      const lastMessage = document.querySelector('[data-message-author-role="assistant"]:last-child');
+      if (lastMessage && this.isElementUpdating(lastMessage)) {
+        contentChanged = true;
+        this.lastUpdateTime = now;
+        console.log('🔍 זוהה עדכון תוכן בהודעת assistant');
       }
     }
 
@@ -199,7 +202,7 @@ class TypingSoundManager {
       this.startTyping();
       this.resetInactivityTimer();
     } 
-    // אם אין שינוי כבר 2 שניות - הפסק הקלדה
+    // אם אין שינוי כבר חצי שנייה - הפסק הקלדה
     else if (this.isTyping && (now - this.lastUpdateTime > NO_CONTENT_UPDATE_STOP_TYPING_MS)) {
       console.log(`⏰ לא היה עדכון תוכן ${NO_CONTENT_UPDATE_STOP_TYPING_MS} מילישניות - הפסקת הקלדה`);
       this.stopTyping();
