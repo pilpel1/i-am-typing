@@ -1,21 +1,8 @@
 // ChatGPT Typing Sounds Extension
 
 // Constants
-const REALISTIC_KEY_SOUND_DURATION = 0.08; // 80ms
-const KEY_SOUND_ENVELOPE_DECAY = 50;
-const KEY_SOUND_ENVELOPE_SQUARED_DECAY = 200;
-const KEY_SOUND_NOISE_AMPLITUDE = 0.4;
-const KEY_SOUND_CLICK1_FREQ = 2000;
-const KEY_SOUND_CLICK1_AMPLITUDE = 0.3;
-const KEY_SOUND_CLICK2_FREQ = 3500;
-const KEY_SOUND_CLICK2_AMPLITUDE = 0.2;
-const KEY_SOUND_CLICK3_FREQ = 5000;
-const KEY_SOUND_CLICK3_AMPLITUDE = 0.1;
-const KEY_SOUND_FINAL_AMPLITUDE = 0.15;
-const NUM_KEYBOARD_SOUNDS = 7;
+const TYPING_SOUND_FILE = 'sounds/typing.mp3'; // קובץ הצליל הארוך
 const KEY_SOUND_GAIN = 0.3;
-const MIN_TYPING_DELAY_MS = 80;
-const RANDOM_TYPING_DELAY_MS = 70;
 const INITIAL_TYPING_DELAY_MS = 400;
 const NO_CONTENT_UPDATE_STOP_TYPING_MS = 500;
 const INACTIVITY_TIMEOUT_SAFETY_NET_MS = 1200;
@@ -24,9 +11,10 @@ const INITIAL_ACTIVITY_CHECK_DELAY_MS = 1000;
 class TypingSoundManager {
   constructor() {
     this.isTyping = false;
-    this.typingInterval = null;
     this.audioContext = null;
-    this.keyboardSounds = [];
+    this.typingBuffer = null;
+    this.currentSource = null;
+    this.gainNode = null;
     this.lastUpdateTime = 0;
     this.inactivityTimeout = null;
     
@@ -36,95 +24,80 @@ class TypingSoundManager {
   async init() {
     console.log('🎵 ChatGPT Typing Sounds - מתחיל...');
     
-    // יצירת צלילי הקלדה ריאליסטיים
-    await this.createKeyboardSounds();
+    // טעינת צליל ההקלדה
+    await this.loadTypingSound();
     
     // התחלת מעקב אחר שינויים בדף
     this.startObserving();
   }
 
-  async createKeyboardSounds() {
+  async loadTypingSound() {
     // יצירת AudioContext
     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
     
-    // יצירת מספר צלילי מקלדת שונים - צלילים יותר ריאליסטיים
-    for (let i = 0; i < NUM_KEYBOARD_SOUNDS; i++) {
-      const buffer = await this.createRealisticKeySound();
-      this.keyboardSounds.push(buffer);
-    }
+    // טעינת קובץ הצליל
+    this.typingBuffer = await this.loadAudioFile(TYPING_SOUND_FILE);
     
-    console.log('🔊 צלילי מקלדת ריאליסטיים נוצרו בהצלחה');
+    if (this.typingBuffer) {
+      console.log('🔊 צליל הקלדה נטען בהצלחה');
+    } else {
+      console.error('❌ לא ניתן לטעון את קובץ הצליל');
+    }
   }
 
-  async createRealisticKeySound() {
-    const sampleRate = this.audioContext.sampleRate;
-    const duration = REALISTIC_KEY_SOUND_DURATION;
-    const buffer = this.audioContext.createBuffer(1, sampleRate * duration, sampleRate);
-    const data = buffer.getChannelData(0);
-
-    for (let i = 0; i < data.length; i++) {
-      const t = i / sampleRate;
+  async loadAudioFile(url) {
+    try {
+      // קבלת URL מלא של התוסף
+      const fullUrl = chrome.runtime.getURL(url);
       
-      // יצירת צליל הקלדה ריאליסטי - שילוב של רעש ותדרים
-      let sample = 0;
+      const response = await fetch(fullUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
       
-      // רעש לבן לאפקט הפלסטיק
-      const noise = (Math.random() - 0.5) * KEY_SOUND_NOISE_AMPLITUDE;
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
       
-      // תדרים גבוהים לקליק
-      const click1 = Math.sin(2 * Math.PI * KEY_SOUND_CLICK1_FREQ * t) * KEY_SOUND_CLICK1_AMPLITUDE;
-      const click2 = Math.sin(2 * Math.PI * KEY_SOUND_CLICK2_FREQ * t) * KEY_SOUND_CLICK2_AMPLITUDE;
-      const click3 = Math.sin(2 * Math.PI * KEY_SOUND_CLICK3_FREQ * t) * KEY_SOUND_CLICK3_AMPLITUDE;
-      
-      // envelope חד וקצר
-      const envelope = Math.exp(-t * KEY_SOUND_ENVELOPE_DECAY) * Math.exp(-t * t * KEY_SOUND_ENVELOPE_SQUARED_DECAY);
-      
-      // שילוב הצלילים
-      sample = (noise + click1 + click2 + click3) * envelope * KEY_SOUND_FINAL_AMPLITUDE;
-      
-      data[i] = sample;
+      return audioBuffer;
+    } catch (error) {
+      console.error(`❌ לא ניתן לטעון ${url}:`, error);
+      return null;
     }
-
-    return buffer;
-  }
-
-  playKeySound() {
-    if (!this.audioContext || this.keyboardSounds.length === 0) return;
-
-    const source = this.audioContext.createBufferSource();
-    const gainNode = this.audioContext.createGain();
-    
-    // בחירת צליל רנדומלי
-    const soundIndex = Math.floor(Math.random() * this.keyboardSounds.length);
-    source.buffer = this.keyboardSounds[soundIndex];
-    
-    // עוצמת קול נמוכה
-    gainNode.gain.value = KEY_SOUND_GAIN;
-    
-    source.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
-    source.start();
   }
 
   startTyping() {
-    if (this.isTyping) return;
+    if (this.isTyping || !this.typingBuffer) return;
     
     this.isTyping = true;
     console.log('⌨️ התחלת הקלדה...');
     
-    // השמעת צליל כל 80-150ms (מהירות הקלדה טבעית)
-    const playSound = () => {
-      if (!this.isTyping) return;
-      
-      this.playKeySound();
-      
-      // זמן רנדומלי בין צלילים
-      const nextDelay = MIN_TYPING_DELAY_MS + Math.random() * RANDOM_TYPING_DELAY_MS;
-      this.typingInterval = setTimeout(playSound, nextDelay);
-    };
+    // השהיה לפני התחלת הצליל
+    setTimeout(() => {
+      if (this.isTyping) {
+        this.playTypingLoop();
+      }
+    }, INITIAL_TYPING_DELAY_MS);
+  }
+
+  playTypingLoop() {
+    if (!this.isTyping || !this.typingBuffer) return;
+
+    // יצירת source חדש
+    this.currentSource = this.audioContext.createBufferSource();
+    this.gainNode = this.audioContext.createGain();
     
-    // השהיה של 400ms לפני התחלת הצלילים
-    this.typingInterval = setTimeout(playSound, INITIAL_TYPING_DELAY_MS);
+    this.currentSource.buffer = this.typingBuffer;
+    this.currentSource.loop = true; // לופ אינסופי
+    
+    // עוצמת קול
+    this.gainNode.gain.value = KEY_SOUND_GAIN;
+    
+    // חיבור השרשרת
+    this.currentSource.connect(this.gainNode);
+    this.gainNode.connect(this.audioContext.destination);
+    
+    // התחלת הצליל
+    this.currentSource.start();
   }
 
   stopTyping() {
@@ -133,9 +106,14 @@ class TypingSoundManager {
     this.isTyping = false;
     console.log('🛑 הפסקת הקלדה');
     
-    if (this.typingInterval) {
-      clearTimeout(this.typingInterval);
-      this.typingInterval = null;
+    // עצירת הצליל
+    if (this.currentSource) {
+      try {
+        this.currentSource.stop();
+      } catch (e) {
+        // אם כבר נעצר - לא נורא
+      }
+      this.currentSource = null;
     }
     
     if (this.inactivityTimeout) {
